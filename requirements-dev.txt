@@ -1,0 +1,4 @@
+apache-airflow==2.7.1
+praw==7.7.0
+pandas==1.4.2
+python-dotenv==0.20.0 

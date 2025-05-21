@@ -1,0 +1,108 @@
+version: '3'
+
+x-airflow-common:
+  &airflow-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: custom-airflow:2.7.1-python3.9
+  env_file:
+    - reddit_credentials.env
+    - airflow.env
+  environment:
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow_reddit
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:postgres@postgres:5432/airflow_reddit
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://postgres:postgres@postgres:5432/airflow_reddit
+    AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    PYTHONPATH: ${PYTHONPATH:-}:/opt/airflow
+  volumes:
+    - ./config:/opt/airflow/config
+    - ./dags:/opt/airflow/dags
+    - ./data:/opt/airflow/data
+    - ./etls:/opt/airflow/etls
+    - ./logs:/opt/airflow/logs
+    - ./pipelines:/opt/airflow/pipelines
+    - ./plugins:/opt/airflow/plugins
+    - ./tests:/opt/airflow/tests
+    - ./utils:/opt/airflow/utils
+    - ./reddit_credentials.env:/opt/airflow/reddit_credentials.env
+    - ./requirements.txt:/opt/airflow/requirements.txt
+  depends_on:
+    - postgres
+    - redis
+
+services:
+  postgres:
+    image: postgres:12
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: airflow_reddit
+      POSTGRES_PORT: 5432
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 30s
+      retries: 50
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command: >
+      -c "pip install -r /opt/airflow/requirements.txt &&
+          airflow db init &&
+          airflow db upgrade &&
+          airflow users create --username admin --firstname admin --lastname admin --role Admin --email airflow@airflow.com --password admin"
+    restart: "no"
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    restart: always
+    depends_on:
+      - airflow-init
+      - postgres
+      - redis
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    command: bash -c "airflow db init && airflow webserver"
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    restart: always
+    depends_on:
+      - airflow-webserver
+    command: bash -c "airflow scheduler"
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    restart: always
+    depends_on:
+      - airflow-scheduler
+    command: bash -c "airflow celery worker"

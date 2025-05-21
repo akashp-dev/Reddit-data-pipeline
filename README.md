@@ -74,4 +74,3 @@ MIT
 
 ---
 
-Inspired by [airscholar/RedditDataEngineering](https://github.com/airscholar/RedditDataEngineering) 
